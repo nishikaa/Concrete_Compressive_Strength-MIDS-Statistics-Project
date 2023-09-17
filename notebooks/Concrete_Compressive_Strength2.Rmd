@@ -1,0 +1,276 @@
+---
+title: "Concrete Compressive Strength"
+subtitle: "Regression Analysis to discover the relationship of superplasticizer to the compressive strength of the concrete"
+author: "Carolyn Dunlap, Kai Ding, Nishika Abeytunge, Scott Thompson"
+date: "Sources: Sample Answer, Office Hours, Course Slack, Async Modules, Live Sessions, Materials from Mark, and/or R Bridge Course."
+output:
+  bookdown::pdf_document2: 
+    toc: true
+    number_sections: true
+fontsize: 9pt
+geometry: 'left=2cm,right=2cm,top=2cm,bottom=2cm'
+header-includes:
+ \usepackage{wrapfig}
+ \usepackage{float}
+ \floatplacement{figure}{H}
+---
+
+```{=tex}
+\newpage
+\setcounter{page}{1}
+
+```
+```{r load packages and set options, include=FALSE}
+library(ggplot2)
+library(ggcorrplot)
+library(GGally)
+library(olsrr)
+library(tidyverse)
+library(sandwich)
+library(magrittr)
+library(stargazer)
+library(lmtest)
+library(MASS)
+library(readxl)
+library(ggpmisc)
+
+
+theme_set(theme_minimal())
+
+options(tinytex.verbose = TRUE)
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load data,  include=FALSE}
+Concrete_Data<-read_excel("data/external/Concrete_Data.xls")
+```
+
+```{r Renamecolumns, include=FALSE} 
+names(Concrete_Data) <- c("Cement","Slag","Ash","Water","Plasticizer","Coarse","Fine","Age","Strength")
+head(Concrete_Data) 
+```
+
+```{r unfiltered data for scatter plot,include=FALSE }
+
+all_data<-Concrete_Data %>%
+  mutate(Water_Cement_Ratio= Water / Cement)
+
+head(all_data)
+```
+
+```{r Create water:cement ratio variable, include=FALSE}
+dat <- Concrete_Data %>%
+  mutate(Water_Cement_Ratio = Water / Cement) %>%
+  filter(Age >= 28)
+```
+
+
+```{r split data into exploration vs confirmation, include=FALSE}
+sample_size <- floor(0.3 * nrow(dat))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(dat)), size=sample_size)
+train <- dat[train_ind, ]
+test <- dat[-train_ind, ]
+
+train
+test
+
+```
+
+```{r  target model, , include=FALSE}
+model_one <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer, data=train)
+coeftest(model_one,vcov=vcovHC(model_one))
+# Check assumptions of LM model
+# No issues with assumptions
+par(mfrow=c(2,2))
+plot(model_one)
+bptest(model_one)
+
+```
+
+```{r  Use best-subset regression to identify other variables, include=FALSE}
+# Explore other model specifications
+model_zero <- lm(Strength ~ Water_Cement_Ratio , data=train)
+model_two <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag, data=train)
+model_three <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Age, data=train)
+model_four <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Ash + Age, data=train)
+model_five <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Age + Ash + Coarse + Fine, data=train)
+stargazer(model_one,model_two,model_three,model_four,model_five,type="text")
+
+```
+
+```{r Use test data to generate star-gazer, echo=FALSE, results="asis",include=FALSE }
+model_1 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer, data=test)
+model_2 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag, data=test)
+model_3 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Age, data=test)
+model_4 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Ash + Age, data=test)
+model_5 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Age + Ash + Coarse + Fine, data=test)
+stargazer(model_1,model_2,model_3,model_4,model_5,type="latex", header=FALSE, column.sep.width = "1pt", font.size = "small")
+```
+
+
+```{r Compute effect size, include=FALSE}
+sd_plasticizer = sd(test$Plasticizer)
+raw_effect = sd_plasticizer * 0.546
+raw_effect
+sd_strength = sd(test$Strength)
+sd_strength
+raw_effect / sd_strength
+0.282 * 32.2/sd_strength
+
+range(dat$Plasticizer)
+
+model_1_scaled <- lm(scale(Strength) ~ scale(Water_Cement_Ratio ) + scale(Plasticizer), data=test)
+model_5_scaled <- lm(scale(Strength) ~ scale(Water_Cement_Ratio ) + scale(Plasticizer) + scale(Slag) + scale(Age) + scale(Ash) + scale(Coarse) + scale(Fine), data=test)
+summary(model_5_scaled)
+
+```
+
+
+
+
+## Introduction
+
+The compressive strength of concrete is a key concern for engineers designing structures (National Ready Mix Concrete Association, 2014). In high rise construction, higher compressive strength concrete allows for less concrete to be used (World Cement, 2014; Tecwill, 2019). This allows for thinner columns, which increases usable space in a building (World Cement, 2014; Tecwill, 2019). Additionally, using less materials can improve the sustainability of building construction (World Cement, 2014; Tecwill, 2019) and reduce overall construction costs (Portland Cement Association, 2022; World Cement, 2014; Tecwill, 2019). For concrete manufacturers, there is a key benefit of higher compressive strength concrete - it sells for a higher price (Angi.com, 2022). Generally, higher strength concrete has a lower water-to-cement ratio (I-Cheng Yeh, 1998), and concrete manufacturers use superplasticizers to make this feasible by improving workability at low water-to-cement ratios (Portland Cement Association, 2022; World Cement, 2014; Tecwill, 2019). Concrete manufacturers may vary the proportions of superplasticizer and other ingredients during production (Portland Cement Association, 2022). Our research question is as follows:
+```{=tex}
+\begin{quote}
+  \textit{Beyond the simple ratio of water to cement, is the quantity of superplasticizer (X Variable) related to the compressive strength of concrete (Y Variable)?}
+\end{quote}
+```
+\begingroup
+\fontsize{6}{7}\selectfont
+|           Adapted/taken from I-Cheng Yeh (1998). Informed by Portland Cement Association (2022).
+\endgroup
+
+Understanding the answer to this question could be valuable to concrete manufacturers seeking to achieve a certain level of compressive strength performance for their cement, which is vital for both maximizing revenue and  enhancing concrete usage in different applications.\footnote{We note that our research question and findings may not be new or novel to existing industry knowledge.}
+
+In addition to water, cement and superplasticizers, cement manufacturers include a number of other ingredients including fly ash, silica fume and blast furnace slag (Portland Cement Association, 2022; World Cement, 2014; Tecwill, 2019). As available in our data, we may include these as additional covariates to control for their effects on the compressive strength of concrete. 
+
+
+## Data
+
+The data set includes 1030 observations, with each observation corresponding to an individual concrete sample. For each sample of concrete, researchers measured the compressive strength, our Y variable, in megapascals (MPa) in a laboratory. Each concrete sample also has a record of the quantity of superplasticizer, measured in kg in a m3 mixture (UCI, 2007), which is our X variable of interest in addition to the quantities (also measured in kg in a m3 mixture) of other key ingredients– cement, blast furnace slag, fly ash, water, coarse aggregate and fine aggregate– which we will consider as potential additional covariates to control for. The age of each concrete sample (in days) is also recorded. Our data set is accessed from UCI Machine Learning Repository. The original owner and source is I-Cheng Yeh of Chung-Hua University (UCI, 2007).
+
+## Operationalization
+
+```{r Corr heat map, echo=FALSE, include=FALSE}
+ggcorr(`dat`, method = c("everything", "pearson")) 
+cor(dat$Plasticizer,dat$Age)
+cor(dat$Plasticizer,dat$Ash)
+cor(dat$Strength,dat$Age)
+cor(dat$Strength,dat$Ash)
+cor(dat$Strength,dat$Slag)
+
+```
+Our input variable of interest, amount of superplasticizer used, is directly operationalized by the proportion of this ingredient in each concrete mixture (measured as kg in a m3 mixture), our X variable. Our key outcome of interest, our dependent (Y) variable, is the compressive strength of concrete, which is closely operationalized as the measurement in MPa (MegaPascal, a measure of pressure). 
+
+The other covariates we included are the water:cement  ratio, coarse aggregate, fine aggregate, blast furnace slag, and fly ash. We considered each of these ingredients as potential X variables of interest, since they are all manipulatable by, and of potential interest to, concrete manufacturers. We decided not to use water or cement, as the relationship between the water_cement  ratio and strength was well-established in the industry (first discovered in 1918) and remains a key variable that is modulated today (Abrams, 1918; Olukoun, 1994). Unsurprisingly in our dataset, this water:cement ratio had the highest correlation with compressive strength [Figure 1a]. Of the remaining other ingredients, superplasticizer showed the highest single correlation to compressive strength (r = 0.37 compared to 0.17, 0.16, 0.13, and 0.11 for fine aggregate, coarse aggregate, blast slag, and fly ash, respectively) [Figure 1b]. Additionally, we were interested insuperplasticizer’s understood role in improving compressive strength by making lower water:cement ratios feasible (Portland Cement Association, 2022). 
+
+The last variable available in our dataset, age of the concrete samples, we decided to control for by analyzing only samples 28 days or older, as we describe in the following Model Building section. 
+
+
+```{r scatter plot figure 1 ,echo=FALSE , fig.show="hold", out.width="50%"}
+par(mar = c(4, 4, .1, .1))
+ggplot(all_data, aes(x=Water_Cement_Ratio, y=Strength)) + labs(x='Water Cement Ratio', y='Strength (MPa)') + ggtitle("Figure 1a: Strength vs Water Cement Ratio")+theme(plot.title = element_text(hjust = 0.5))+
+  geom_point(shape=18, color="blue")+
+  geom_smooth(method=lm,  linetype="dashed",
+             color="darkred", fill="blue")
+
+ggplot(all_data, aes(x=Plasticizer, y=Strength))+labs(x='Plasticizer(kg/m3)', y='Strength(MPa)') + ggtitle("Figure 1b: Strength vs Plasticizer")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  geom_point(shape=18, color="blue")+
+  geom_smooth(method=lm,  linetype="dashed",
+             color="darkred", fill="blue")
+```
+
+
+## Model Building
+
+Before building our model, we decided to remove all samples that were younger than 28 days (n=324, leaving n=706 samples for analysis). Concrete gets its compressive strength due to the chemical reaction that occurs primarily between water and cement (Herff College of Engineering, 2022). This reaction occurs over time and is well-studied, resulting in a nonlinear relationship between age and the compressive strength of concrete up to 28 days. After 28 days, the concrete has asymptotically reached its maximum compressive strength. For this reason, the industry standard is to measure the compressive strength of a concrete sample at 28 days. We observed this nonlinear relationship before 28 days in our dataset [Figure 2]. Thus we chose to only analyze samples 28 days or older, to control for these age effects and limit our model to more directly assessing the relationship between superplasticizer and compressive strength.
+
+```{r scatter plot figure 2 ,echo=FALSE , fig.show="hold", out.width="50%", fig.height = 3, fig.width = 5, fig.align='center'}
+par(mar = c(4, 4, .1, .1))
+ggplot(all_data, aes(x=Age, y=Strength)) + labs(x='Age (Days)', y='Strength (MPa)') + ggtitle("Figure 2: Strength vs Age")+theme(plot.title = element_text(hjust = 0.5))+
+  geom_point(shape=18, color="blue")+
+  geom_smooth(method=lm,  linetype="dashed",
+             color="darkred", fill="blue")
+
+
+```
+
+From our analysis, our resulting model was:
+
+$$
+  \widehat{strength}=\beta_0 + \beta_1\cdot R \cdot (water:cement\ ratio) + \beta_2 \cdot R \cdot superplasticize + \mathbf{Z\gamma}
+$$
+where $R$ is an indicator for remodeling, $\beta_1$ represents the effect of water:cement ratio on concrete strength, and $\beta_2$ represents the effect of superplasticizer on strength, and $\mathbf{Z\gamma}$ is a vector of additional covariates.
+
+We created a water:cement ratio variable from two variables water and cement because of the ratio’s wide acceptance in the concrete industry. Besides the water:cement ratio and superplasticizer, we explored other model specifications, using all other variables as covariates. We analyzed models to see which would offer  that would result in the highest adjusted R-squared, to both compare the effect size of superplasticizer with other concrete ingredients and identify potential omitted variable bias.
+
+## Results
+
+Table 1 shows the results of these model explorations. Across all models, the key coefficient on superplasticizer was highly statistically significant with point estimates ranging from 0.282 to 0.546. As we can see, besides superplasticizer, slag is the most important ingredient that improves adjusted R-squared from 0.442 to 0.598. 
+
+Age and Ash strongly affect the $\beta_1$ coefficient for superplasticizer. This is not surprising, given EDA identified high correlation between Age/superplasticizer (-0.31) and Ash/superplasticizer (0.39). More specifically, not having Age in model specification (Model 2 - 3) will cause us to understate $\beta_1$ by ~40% (0.426 vs 0.601), while not having Ash in model specification (Model 3 - 4) will cause us to overstate $\beta_1$ by ~41% (0.601 vs 0.351).
+
+To provide a sense of scale, applying Model 5, increasing superplasticizer by 1 standard deviation (5.79 units) increases concrete strength by 1.63 MPa (megapascal), which represents 0.10 standard deviation increase in strength. Applying Model 1, increasing superplasticizer by 1 standard deviation (5.79 units) increases concrete strength by 3.16 MPa (megapascal), which represents 0.20 standard deviation increase in strength. The range of superplasticizer is from 0 to 32.2 units. Therefore hypothetically, keeping all else constant, the difference between max and min superplasticizer usage results in improvement of 0.57 - 1.12 standard deviation of strength (Model 5 - Model 1).
+
+
+```{r Use test data to generate star-gazer2,echo=FALSE, results="asis"}
+model_1 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer, data=test)
+model_2 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag, data=test)
+model_3 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Age, data=test)
+model_4 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Ash + Age, data=test)
+model_5 <- lm(Strength ~ Water_Cement_Ratio  + Plasticizer + Slag + Age + Ash + Coarse + Fine, data=test)
+stargazer(model_1,model_2,model_3,model_4,model_5,type="latex",omit.stat=c("f"), header=FALSE,no.space=TRUE, title="Regression Results",column.sep.width = "1pt", font.size = "small", float = FALSE)
+```
+
+## Discussion and Limitations
+
+Given the number of samples we analyzed (n = 706), we evaluated our data against the large sample model assumptions and found that all assumptions were met (number of samples, data normality, and even variance).
+
+Structurally, some important variables that were not included in the dataset were aspects of the concrete mixing process and curing conditions. Both of these factors heavily influence the overall compressive strength of concrete. This dataset was an accumulation of concrete samples collected across 17 different locations and so there is no way to know or control for curing or preparation conditions. Because of this, we can only assume that these factors would contribute to some of the variability in the data, which may have decreased our model’s power or introduced some unknown bias. 
+
+Another important limitation of this analysis is that according to the source paper for this dataset, the superplasticizers used in each concrete sample were from multiple different manufacturers and made from different chemical compositions. Unfortunately, none of this information was kept or included in the dataset, so we have no way of knowing the different kinds of superplasticizers used, and this could very well have important implications for our model, potentially calling these results into question. 
+
+Fortunately, due to the nature of our variables and this experimental dataset, it is unlikely that there is reverse causality in the model, as compressive strength of the concrete is a physical change and would not alter the levels of superplasticizer. While we did not have any direct outcome variables on the right hand side (all ingredients are independently added to the concrete mixture), superplasticizer itself is added in order to help decrease the amount of water that can be added to the cement. Therefore, the amount of superplasticizer added to the concrete may either directly increase the compressive strength of concrete, or may allow the concrete to have a lower water:cement ratio which in turn is responsible for the increase in compressive strength. This relationship can be seen when comparing superplasticizer to the water:cement ratio or to water alone [Figure 3].
+
+```{r figure_3, echo=FALSE, message=FALSE, fig.cap = "Superplasticizer is correlated with the amount of water added to concrete samples.", fig.height = 3, fig.width = 5}
+
+ggplot(data = dat) + 
+  aes(y = Water, x = Plasticizer) +
+  geom_point() + 
+  stat_poly_line(se = FALSE) +
+  stat_poly_eq(label.y = 0.9, label.x = 'right') +
+  stat_correlation(label.x = 'right') +
+  labs(
+    x = 'Plasticizer (kg/cubic meter of concrete)', 
+    y = 'Water (kg/cubic meter of concrete)'
+  ) +
+  theme(legend.title=element_blank(), legend.position = c(0.8, 0.84))
+```
+
+Finally, by controlling for age, our analysis was limited to the effects of superplasticizer on the compressive strength of concrete after concrete has fully cured. Our analysis does not speak to the effects of superplasticizer on the compressive strength of concrete at earlier time points.
+
+
+## Conclusion
+
+update after discussion
+
+
+## Sources
+
+* UCI Machine Learning Repository. “Concrete Compressive Strength Data Set”. Donated in 2007
+* This Research is adapted from: I-Cheng Yeh, "Modeling of strength of high performance concrete using artificial neural networks," Cement and Concrete Research, Vol. 28, No. 12, pp. 1797-1808 (1998)
+* National Ready Mix Concrete Association (2014) CIP 35 - Testing Compressive Strength of Concrete
+* Angi.com “How Much Does Concrete Cost?” (2022)
+* Course materials and guidance from Mark
+* This research report copies from our research proposal
+* World Cement. “Benefits of using high-strength concrete” (2014)
+* Portland Cement Association “High-Strength Concrete” 2022
+* Tecwill. “High Strength Concrete – Production and Benefits” (2019)

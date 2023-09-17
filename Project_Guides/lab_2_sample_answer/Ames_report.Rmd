@@ -1,0 +1,200 @@
+---
+title: "Estimating the Market Value of House Remodels"
+author: 'Lab 2 Sample Answer - Paul Laskowski'
+output:
+  pdf_document
+header-includes:
+ \usepackage{wrapfig}
+ \usepackage{float}
+ \floatplacement{figure}{H}
+---
+
+```{r load packages and set options, include=FALSE}
+library(tidyverse)
+library(magrittr)
+
+library(stargazer)
+
+library(sandwich)
+library(lmtest)
+
+theme_set(theme_bw())
+```
+
+
+```{r load data, message = FALSE, include=FALSE}
+ames <- read.csv("./data/final/ames_confirm.csv") %>% 
+  rename_with(~ tolower(gsub(".", "_", .x, fixed=TRUE))) %>% 
+  mutate(
+    ms_subclass = factor(ms_subclass),
+    age = yr_sold - year_built,
+    remodeled = year_remod_add > year_built + 1,
+    immediate_remodel = year_remod_add == year_built + 1,
+    years_since_remod = remodeled * (yr_sold - year_remod_add),
+    age_at_remod = remodeled * (year_remod_add - year_built)
+    )
+```
+
+## Introduction 
+
+As today's housing stock ages, the choice to remodel a property is driven by many factors, some personal and some market-wide. For many owners, a major concern is the effect a remodel will have on future revenues, including those from renting and from selling the property. Some may turn to real estate professionals for guidance. In a 2019 survey performed by the National Association of Realtors, members estimated the financial benefit of different type of remodels, ranging from \$2,500 for a closet renovation up to \$20,000 for a full kitchen remodel. 
+
+While experts may provide broad guidelines, data-based approaches are needed to reduce uncertainty in the value of remodels. In the aggregate, remodeling accounts for $400 billion spent each year in the US.^[La Jeunesse, Elizabeth. “Healthy Home Remodeling: Consumer Trends and Contractor Preparedness.” Harvard’s Joint Center for Housing Studies (2019).] Uncertainty in how much of this money can be recouped may contribute to the misallocation or underprovision of resources in this sector of the economy.
+
+This study estimates the economic value for remodeling a home empirically, utilizing observations of house sales in Ames, Iowa. The data shows the timing of the last remodel before a house is sold, but does not distinguish between different types of remodels. Applying a set of regression models, I estimate the value that results immediately when a house is remodeled, and also the rate at which it decays over time.
+
+## Data and Methodology
+
+The data in this study comes from the Ames, Iowa Assessor. It was compiled and made publicly available by Dean De Cock.^[De Cock, Dean. "Ames, Iowa: Alternative to the Boston housing data as an end of semester regression project." Journal of Statistics Education 19.3 (2011).] Each row in the data represents a home sale in Ames between `r min(ames$yr_sold)` to `r max(ames$yr_sold)`. I performed all exploration and model building on a 30\% subsample of the data. The remaining 70\%, totaling `r nrow(ames)` rows, was used to generate the statistics in this report.
+
+```{r filter data, include=FALSE}
+## count number of homes built before 1950
+num_pre_1950 <- ames %>% 
+  filter(year_built <= 1950) %>% 
+  nrow()
+
+## filter to include only houses built after 1950
+ames <- ames %>% 
+  filter(year_built > 1950)
+
+## count number of homes built after 1950
+num_after_1950 <- ames %>% 
+  nrow()
+
+## how many homes immediately remodeled? 
+num_immediate_remodel <- ames %>% 
+  filter(immediate_remodel == TRUE) %>% 
+  nrow()
+
+## how many immediately remodeled after 2000? 
+frac_immediate_after_2000 <- ames %>% 
+  filter(year_built > 2000) %>% 
+  summarize(percent = mean(immediate_remodel))
+```
+
+Detecting which homes are remodeled requires some care. The year built variable represents the original construction date, while the year remodeled variable contains the time of the last remodel before the sale. According to the data dictionary, if a home was never remodeled, the year remodeled and year built should be the same. Because the year remodel variable is censored at 1950, there is no way to reliably determine which homes built in 1950 or earlier were never remodeled. I filter out the `r num_pre_1950` homes in this category, leaving `r num_after_1950` observations. There are also `r num_immediate_remodel` homes recorded as remodeled one year after being built. In fact, this includes `r frac_immediate_after_2000['percent'] %>% round(2)` of homes built after 2000. Because that fraction is implausibly high, I interpret these records as showing two dates for what is really a single construction. I therefore consider a house to be remodeled if there is at least a 2-year difference between the year build year and the year remodeled. As a robustness check, I reran the analysis using a 1-year difference, and found that this does not cause any substantial change in the key regression coefficients.
+
+To operationalize economic value, I divide the sale price of a home by the number of square feet of above-ground living area. This form was chosen to best fit the relationship seen in exploratory plots. Figure 1 plots price per square feet as a function of age, with remodeled homes shown in blue and non-remodeled in red. There is a general negative relationship between value and age. Interestingly, among homes that are less than 15 years old, remodeled homes are worth less than non-remodeled homes on the average.
+
+```{r figure_1, echo=FALSE, message=FALSE, fig.cap = "Home Value as a Function of Age", fig.height = 3, fig.width = 5}
+ames %>% 
+  mutate(
+    remodeled = case_when(
+      remodeled ~ "Remodeled",
+      TRUE ~ "Not Remodeled")) %>% 
+  ggplot() + 
+    aes(y=saleprice/gr_liv_area, x = age, colour = remodeled) + 
+    geom_point() +
+    geom_smooth(se=FALSE) +  
+    labs(
+      x = 'Age when sold', 
+      y = 'Price per square foot') +
+  theme(legend.title=element_blank(), legend.position = c(0.8, 0.84))
+```
+
+I am interested in the difference in value between two counterfactuals: one in which a house is remodeled, and another in which it is not. There are two key factors that might affect this increase in value:
+
+- The age of the house when remodeled. It is possible that remodeling an older home results in a larger value increase than remodeling a newer home.
+- The time between the remodel and the sale. It is possible that remodels become more or less valuable over time, and the rate of change may be different than that of houses in general.
+
+Exploratory plots suggest that both effects exist and that both are roughly linear. I therefore create regression models in which the "boost" from remodeling increases by a fixed amount with the age of the house when remodeled, and also changes by another fixed amount with each year that passes after the remodel. In other words, I fit regressions of the form,
+
+$$
+  \widehat{price /sqrtft}=\beta_0 + \beta_1\cdot R \cdot (year\ remodeled - year\ built) + \beta_2 \cdot R \cdot (year\ sold - year\ remodeled) + \mathbf{Z\gamma}
+$$
+
+where $R$ is an indicator for remodeling, $\beta_1$ represents the immediate increase in value per year the house existed before remodeling, $\beta_2$ represents the change in the value increase for each year that passes after the remodel, $\mathbf{Z}$ is a row vector of additional covariates, and $\mathbf{\gamma}$ is a column vector of coefficients.
+
+I considered specifications that also include the modeling indicator $R$ by itself (i.e. uninteracted). This type of model allows for the possibility that even a brand new house that is remodeled immediately increases in value. However, when fitting such models in the exploration set, the resulting coefficient was practically small (equivalent to reducing the age of a home by 1 to 2 years) and non-significant. To improve the precision of my estimates and the simplicity of the model, I removed this term.
+
+## Results
+
+```{r fit models, include=FALSE, warning=FALSE}
+m_minimal  <- ames %$% 
+  lm(saleprice/gr_liv_area ~ age_at_remod + years_since_remod + age)
+m_minimal2 <- ames %$% 
+  lm(saleprice ~ age_at_remod + years_since_remod + age + gr_liv_area)
+
+## stargazer(m_minimal, m_minimal2, type = 'text', warning=FALSE)
+
+se_minimal <- m_minimal %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+
+m_central <- ames %$% 
+  lm(saleprice/gr_liv_area ~ age_at_remod + years_since_remod + age + ms_zoning + 
+       lot_area + bldg_type + gr_liv_area  + full_bath + half_bath + 
+       totrms_abvgrd + sale_type + yr_sold*neighborhood)
+
+se_central <- m_central %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+
+m_verbose <- ames %$% 
+  lm(saleprice/gr_liv_area ~ age_at_remod + years_since_remod + age + ms_zoning + 
+       lot_area + bldg_type + gr_liv_area + full_bath + half_bath + 
+       totrms_abvgrd + sale_type + yr_sold*neighborhood + 
+       ## additional covariate below
+       wood_deck_sf + open_porch_sf + enclosed_porch + x3ssn_porch + street + 
+       lot_shape + lot_config + land_slope  +  mas_vnr_type + foundation +  
+       heating + central_air + electrical + roof_style +  roof_matl + 
+       kitchen_abvgr +  paved_drive + pool_area)
+
+se_verbose <- m_verbose %>% 
+  vcovHC(type = "HC1") %>% 
+  diag() %>% 
+  sqrt()
+```
+
+
+```{r display regression table, message=FALSE, echo=FALSE, results='asis'}
+stargazer(
+  m_minimal, m_central, m_verbose, 
+  type = 'latex', 
+  se = list(se_minimal,se_central,se_verbose),
+  omit = c("ms_zoning","bldg_type", "sale_type","neighborhood", "wood|porch|roof|shape|slope|street|vnr|config|foundation|heating|central|electrical|paved|pool|kitchen"),
+  header=FALSE,
+  title = "Estimated Regressions",
+  dep.var.caption  = "Output Variable: price per square foot",
+  dep.var.labels   = "",
+  star.cutoffs = c(0.05, 0.01, 0.001),
+  covariate.labels = c("$R \\cdot (year\\ remodeled - year\\ built)$", "$R \\cdot (year\\ sold - year\\ remodeled)$", "Age", "Lot square feet",
+  "Living square feet", "Full baths", "Half baths", "Total rooms", "Year sold", "Constant"),
+  add.lines = list(
+    c("Zoning type", "", "\\checkmark","\\checkmark"),
+    c("Building type", "", "\\checkmark", "\\checkmark"),
+    c("Sale type", "", "\\checkmark","\\checkmark"),
+    c("Neighborhood market trends", "", "\\checkmark","\\checkmark"),
+    c("Additional features", "", "","\\checkmark"),
+    "\\hline"
+  ), 
+  omit.stat=c("adj.rsq","f"), 
+  digits=2,
+  notes.append = FALSE,
+  notes = "\\parbox[t]{7cm}{$HC_1$ robust standard errors in parentheses. Additional features are deck area, open porch area, enclosed porch area, 3-season porch area, street type, lot shape, lot configuration, land slope, masonry veneer type, heating type, central air conditioning, electrical system, roof style, roof material, kitchen number, paved driveway, and pool area.}"
+)
+```
+
+Table 1 shows the results of three representative regressions. Across all models, the key coefficient on $R \cdot (year\ remodeled - year\ built)$ was highly statistically significant. Point estimates range from `r min(m_minimal$coef[2], m_central$coef[2], m_verbose$coef[2]) %>% sprintf(fmt = '%#.2f')` to `r max(m_minimal$coef[2], m_central$coef[2], m_verbose$coef[2]) %>% sprintf(fmt = '%#.2f')`. To provide some sense of scale, consider a hypothetical house with 2,000 square feet of living area that was never remodeled before. Applying model 3, if the house is 20 years old, a remodel is predicted to increase resale value by `r (m_verbose$coef[2] * 2000 * 20) %>% signif(2) %>% formatC(format="fg", big.mark=",")` dollars. If the house is 50 years old, the number rises to `r (m_verbose$coef[2] * 2000 * 50) %>% signif(2) %>% formatC(format="fg", big.mark=",")` dollars.
+
+Across all models, the coefficient on $R \cdot (year\ sold - year\ remodeled)$ was also highly statistically significant. Point estimates range from `r min(m_minimal$coef[3], m_central$coef[3], m_verbose$coef[3]) %>% sprintf(fmt = '%#.2f')` to `r max(m_minimal$coef[3], m_central$coef[3], m_verbose$coef[3]) %>% sprintf(fmt = '%#.2f')`. This is evidence that the boost in value from a remodel fades over time. Moreover, the extra value decreases even relative to the overall effect of aging for a house. For an example, again consider a hypothetical house with 2,000 square feet of living area. According to model 3, if a remodel occurred 5 years ago, it is worth `r (-1 * m_verbose$coef[3] * 2000 * 5) %>% signif(2) %>% formatC(format="fg", big.mark=",")` dollars less than a remodel today. If the house was 20 years old when remodeled, at `r (-1 * m_verbose$coef[2] * 20/m_verbose$coef[3]) %>% signif(2) %>% formatC(format="fg", big.mark=",")` years after remodeling, the value boost is predicted to disappear, meaning that the house is worth the same as an equivalent house that was never remodeled. A perhaps unrealistic feature of the model is that the predicted value of a remodel is predicted to become negative after this point.
+
+## Limitations
+
+Consistent regression estimates require an assumption of independent and identically distributed (iid) observations. Because homes exist in a geography, there is a possibility of geographical clustering. I partly account for this possibility in models 2 and 3, by including a fixed effect for each neighborhood that is interacted with year sold. In other words, each neighborhood has a unique slope and linear trend over time. I am not able to account for geographical clustering within each neighborhood.
+
+Because house sales take place over time, there is a further possibility of temporal autocorrelation. Real estate professionals often use past sale prices to help value current properties, so a high sale price at one time may increase the probability of high sale prices at future dates.
+
+Consistent regression estimates also require that the population distribution is described by a unique best linear predictor. Supporting this assumption, I do not see any visual evidence of heavy tailed distributions in any diagnostic plot. Variables are automatically dropped to avoid perfect collinearity.
+
+As far as structural limitations, several omitted variables may bias my estimates. In a classic omitted variables framework, the omitted variable is assumed not to interact with the key variable in the true model. An example of a variable for which this assumption is plausible is uneven floors. If uneven floors make it more difficult to perform a remodel, I expect a negative correlation between uneven floors and my key variables. Since uneven floors are likely to have a negative effect on price in the true model, I predict a positive omitted variable bias on the key variables. The main effect is therefore being driven away from zero, making my hypothesis tests overconfident. A similar analysis holds for unusual room dimensions and exposure to earthquakes.
+
+The standard textbook analysis must be modified when a remodel is performed to correct a problem with a house. For an example, consider homes containing toxic materials. While the presence of toxic materials may cause a remodel, it is also an outcome variable. That is, remodeling may cause toxic materials to decrease. In the extreme case, all homes with toxic materials become remodeled, such that no toxic materials remain in the data. The positive benefits of removing toxic materials then become impossible to measure. As a result, I expect a remodel to appear less valuable than it really is. The main effect is therefore being driven towards zero, suggesting that my hypothesis tests are underconfident. A similar analysis holds for problems like unfashionable cabinets, mold, and pet damage.
+
+## Conclusion
+
+This study estimated the economic value of remodeling a home. For every year that a house existed before a remodel, our models predict an increase in price per square foot between `r min(m_minimal$coef[2], m_central$coef[2], m_verbose$coef[2]) %>% sprintf(fmt = '%#.2f')` and `r max(m_minimal$coef[2], m_central$coef[2], m_verbose$coef[2]) %>% sprintf(fmt = '%#.2f')` dollars. We also describe and measure an effect in which the value from a remodel tends to disappear over time. The time scale over which the benefit disappears is roughly comparable to the age of the house when remodeled. 
+
+In future research, new datasets may be generated to estimate the value of specific types of remodels. Owners may want to know, for example, the financial benefit of new floors or hidding kitchen appliances. The ultimate hope of this line of work is to provide accurate tools for owners to plan investments, and reduce uncertainty in the remodeling industry. 
