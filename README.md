@@ -1,6 +1,6 @@
-# This Project was carried out as a project for UC Berkeley MIDS Program's Statistics class
+## This Project was carried out as a project for UC Berkeley MIDS Program's Statistics class
 
-## Concrete Compressive Strength
+# Concrete Compressive Strength
 Regression Analysis to discover the relationship of superplasticizer to the compressive strength of the concrete
 
 The compressive strength of concrete is a key concern for engineers designing structures (National Ready Mix Concrete Association, 2014). In high rise construction, higher compressive strength concrete allows for less concrete to be used (World Cement, 2014; Tecwill, 2019). This allows for thinner columns, which increases usable space in a building (World Cement, 2014; Tecwill, 2019). Additionally, using less materials can improve the sustainability of building construction (World Cement, 2014; Tecwill, 2019) and reduce overall construction costs (Portland Cement Association, 2022; World Cement, 2014; Tecwill, 2019). For concrete manufacturers, there is a key benefit of higher compressive strength concrete - it sells for a higher price (Angi.com, 2022). Generally, higher strength concrete has a lower water-to-cement ratio (I-Cheng Yeh, 1998), and concrete manufacturers use superplasticizers to make this feasible by improving workability at low water-to-cement ratios (Portland Cement Association, 2022; World Cement, 2014; Tecwill, 2019). Concrete manufacturers may vary the proportions of superplasticizer and other ingredients during production (Portland Cement Association, 2022). Our research question is as follows:
